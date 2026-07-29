@@ -1,5 +1,4 @@
 import cv2
-import numpy as np
 
 from colors import (
     get_color,
@@ -15,27 +14,21 @@ class AnnotationRenderer:
 
     def __init__(self, coco_json):
 
-        self.data = coco_json
-
         self.categories = {
             c["id"]: c["name"]
             for c in coco_json["categories"]
         }
 
-        self.images = {
-            img["id"]: img
-            for img in coco_json["images"]
-        }
-
         self.annotations = coco_json["annotations"]
 
-    # ----------------------------------------------------
+    # ---------------------------------------------------------
 
     def get_annotations(self, image_id):
 
         anns = [
-            a for a in self.annotations
-            if a["image_id"] == image_id
+            ann
+            for ann in self.annotations
+            if ann["image_id"] == image_id
         ]
 
         anns.sort(
@@ -45,25 +38,59 @@ class AnnotationRenderer:
 
         return anns
 
-    # ----------------------------------------------------
+    # ---------------------------------------------------------
 
     def draw(self, image, image_id):
 
         img = image.copy()
+
         overlay = image.copy()
 
         annotations = self.get_annotations(image_id)
 
-        used_labels = []
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        scale = get_font_scale()
+
+        thickness = get_font_thickness()
+
+        img_h, img_w = img.shape[:2]
+
+        occupied = []
+
+        # -------------------------------------------------
+        # Draw Filled Boxes
+        # -------------------------------------------------
 
         for ann in annotations:
 
-            x, y, w, h = ann["bbox"]
+            x, y, w, h = map(int, ann["bbox"])
 
-            x = int(x)
-            y = int(y)
-            w = int(w)
-            h = int(h)
+            color = get_color(ann["category_id"])
+
+            cv2.rectangle(
+                overlay,
+                (x, y),
+                (x + w, y + h),
+                color,
+                -1
+            )
+
+        img = cv2.addWeighted(
+            overlay,
+            get_alpha(),
+            img,
+            1 - get_alpha(),
+            0
+        )
+
+        # -------------------------------------------------
+        # Draw Borders + Labels
+        # -------------------------------------------------
+
+        for ann in annotations:
+
+            x, y, w, h = map(int, ann["bbox"])
 
             category = ann["category_id"]
 
@@ -74,21 +101,7 @@ class AnnotationRenderer:
 
             color = get_color(category)
 
-            # ------------------------------------------
-            # Transparent Fill
-            # ------------------------------------------
-
-            cv2.rectangle(
-                overlay,
-                (x, y),
-                (x + w, y + h),
-                color,
-                -1
-            )
-
-            # ------------------------------------------
             # Border
-            # ------------------------------------------
 
             cv2.rectangle(
                 img,
@@ -98,16 +111,6 @@ class AnnotationRenderer:
                 get_border_thickness()
             )
 
-            # ------------------------------------------
-            # Label Size
-            # ------------------------------------------
-
-            font = cv2.FONT_HERSHEY_SIMPLEX
-
-            scale = get_font_scale()
-
-            thickness = get_font_thickness()
-
             (tw, th), _ = cv2.getTextSize(
                 label,
                 font,
@@ -115,67 +118,88 @@ class AnnotationRenderer:
                 thickness
             )
 
-            label_x = x
-            label_y = y - 8
+            # -------------------------------------
+            # Preferred Positions
+            # -------------------------------------
 
-            # Keep label inside image
+            candidates = [
 
-            if label_y < th + 5:
-                label_y = y + h + th + 8
+                (x, y - 6),
 
-            # ------------------------------------------
-            # Prevent overlap
-            # ------------------------------------------
+                (x, y + h + th + 8),
 
-            while True:
+                (x + w - tw - 8, y - 6),
+
+                (x + w - tw - 8, y + h + th + 8),
+
+            ]
+
+            chosen = None
+
+            for lx, ly in candidates:
+
+                lx = max(0, min(lx, img_w - tw - 10))
+
+                ly = max(th + 8, min(ly, img_h - 2))
+
+                box = (
+                    lx,
+                    ly - th - 8,
+                    lx + tw + 8,
+                    ly
+                )
 
                 overlap = False
 
-                for rx1, ry1, rx2, ry2 in used_labels:
+                for b in occupied:
 
-                    if (
-                        label_x < rx2 and
-                        label_x + tw + 8 > rx1 and
-                        label_y - th - 8 < ry2 and
-                        label_y > ry1
+                    if not (
+                        box[2] < b[0] or
+                        box[0] > b[2] or
+                        box[3] < b[1] or
+                        box[1] > b[3]
                     ):
-
-                        label_y = ry2 + th + 6
                         overlap = True
                         break
 
                 if not overlap:
+
+                    chosen = box
+                    occupied.append(box)
                     break
 
-            used_labels.append(
-                (
-                    label_x,
-                    label_y - th - 8,
-                    label_x + tw + 8,
-                    label_y
-                )
-            )
+            # -------------------------------------
+            # If everything overlaps,
+            # use the first position.
+            # -------------------------------------
 
-            # ------------------------------------------
-            # Label Background
-            # ------------------------------------------
+            if chosen is None:
+
+                lx = x
+
+                ly = max(th + 8, y - 6)
+
+                chosen = (
+                    lx,
+                    ly - th - 8,
+                    lx + tw + 8,
+                    ly
+                )
+
+            x1, y1, x2, y2 = chosen
 
             cv2.rectangle(
                 img,
-                (label_x, label_y - th - 8),
-                (label_x + tw + 8, label_y),
+                (x1, y1),
+                (x2, y2),
                 color,
                 -1
             )
 
-            # ------------------------------------------
-            # Label Text
-            # ------------------------------------------
-
             cv2.putText(
                 img,
                 label,
-                (label_x + 4, label_y - 4),
+                (x1 + 4, y2 - 4),
                 font,
                 scale,
                 get_text_color(),
@@ -183,28 +207,4 @@ class AnnotationRenderer:
                 cv2.LINE_AA
             )
 
-        # ----------------------------------------------
-        # Blend Overlay
-        # ----------------------------------------------
-
-        img = cv2.addWeighted(
-            overlay,
-            get_alpha(),
-            img,
-            1 - get_alpha(),
-            0
-        )
-
         return img
-
-    # ----------------------------------------------------
-
-    def get_image_ids(self):
-
-        return list(self.images.keys())
-
-    # ----------------------------------------------------
-
-    def get_image_info(self, image_id):
-
-        return self.images[image_id]
