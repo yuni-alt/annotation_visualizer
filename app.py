@@ -10,8 +10,12 @@ from renderer import AnnotationRenderer
 from image_generator import ImageGenerator
 from pdf_generator import PDFGenerator
 
+# -------------------------------------------------------
+# Page Configuration
+# -------------------------------------------------------
+
 st.set_page_config(
-    page_title="Annotation Visualizer",
+    page_title="Label Studio Annotation Visualizer",
     page_icon="🖼️",
     layout="wide"
 )
@@ -19,68 +23,49 @@ st.set_page_config(
 st.title("🖼️ Label Studio Annotation Visualizer")
 
 st.write(
-    "Upload a COCO result.json file and the corresponding images."
+    "Upload one COCO result.json file and one image."
 )
 
-# --------------------------------------------------------
+# -------------------------------------------------------
 # Upload Files
-# --------------------------------------------------------
+# -------------------------------------------------------
 
 json_file = st.file_uploader(
     "Upload COCO JSON",
     type=["json"]
 )
 
-uploaded_images = st.file_uploader(
-    "Upload Images",
-    type=["jpg", "jpeg", "png"],
-    accept_multiple_files=True
+uploaded_image = st.file_uploader(
+    "Upload Image",
+    type=["jpg", "jpeg", "png"]
 )
 
-# --------------------------------------------------------
+# -------------------------------------------------------
 # Main
-# --------------------------------------------------------
+# -------------------------------------------------------
 
-if json_file is not None and uploaded_images:
+if json_file is not None and uploaded_image is not None:
 
-    coco = json.load(json_file)
+    try:
 
-    renderer = AnnotationRenderer(coco)
+        # -----------------------------------------------
+        # Load JSON
+        # -----------------------------------------------
 
-    image_generator = ImageGenerator()
+        coco = json.load(json_file)
 
-    pdf_generator = PDFGenerator()
+        renderer = AnnotationRenderer(coco)
 
-    image_lookup = {}
+        image_generator = ImageGenerator()
 
-    # Build lookup using uploaded filenames
-    for img in uploaded_images:
+        pdf_generator = PDFGenerator()
 
-        image_lookup[img.name] = img
-
-    annotated_images = []
-
-    st.divider()
-
-    st.subheader("Preview")
-
-    for image_info in coco["images"]:
-
-        image_name = os.path.basename(
-            image_info["file_name"].replace("\\", "/")
-        )
-
-        if image_name not in image_lookup:
-
-            st.warning(
-                f"Image not uploaded: {image_name}"
-            )
-            continue
-
-        uploaded_file = image_lookup[image_name]
+        # -----------------------------------------------
+        # Read Uploaded Image
+        # -----------------------------------------------
 
         file_bytes = np.asarray(
-            bytearray(uploaded_file.read()),
+            bytearray(uploaded_image.read()),
             dtype=np.uint8
         )
 
@@ -89,12 +74,40 @@ if json_file is not None and uploaded_images:
             cv2.IMREAD_COLOR
         )
 
+        if image is None:
+
+            st.error("Unable to read uploaded image.")
+
+            st.stop()
+
+        # -----------------------------------------------
+        # Get Image ID
+        # -----------------------------------------------
+
+        if len(coco["images"]) == 0:
+
+            st.error("No images found inside JSON.")
+
+            st.stop()
+
+        image_id = coco["images"][0]["id"]
+
+        # -----------------------------------------------
+        # Render
+        # -----------------------------------------------
+
         annotated = renderer.draw(
             image,
-            image_info["id"]
+            image_id
         )
 
-        annotated_images.append(annotated)
+        # -----------------------------------------------
+        # Preview
+        # -----------------------------------------------
+
+        st.divider()
+
+        st.subheader("Preview")
 
         rgb = cv2.cvtColor(
             annotated,
@@ -103,29 +116,35 @@ if json_file is not None and uploaded_images:
 
         st.image(
             rgb,
-            caption=image_name,
             use_container_width=True
         )
 
-        saved_path = image_generator.save_image(
-            annotated,
-            image_name
+        # -----------------------------------------------
+        # Save Annotated Image
+        # -----------------------------------------------
+
+        output_name = (
+            os.path.splitext(uploaded_image.name)[0]
+            + "_annotated.jpg"
         )
 
-        with open(saved_path, "rb") as f:
+        saved_image = image_generator.save_image(
+            annotated,
+            output_name
+        )
+
+        with open(saved_image, "rb") as f:
 
             st.download_button(
-                label=f"⬇ Download {image_name}",
+                label="⬇ Download Annotated Image",
                 data=f,
-                file_name=image_name,
+                file_name=output_name,
                 mime="image/jpeg"
             )
 
-    # ----------------------------------------------------
-    # PDF
-    # ----------------------------------------------------
-
-    if annotated_images:
+        # -----------------------------------------------
+        # Create PDF
+        # -----------------------------------------------
 
         with tempfile.NamedTemporaryFile(
             suffix=".pdf",
@@ -135,17 +154,23 @@ if json_file is not None and uploaded_images:
             pdf_path = tmp.name
 
         pdf_generator.save_pdf(
-            annotated_images,
+            [annotated],
             pdf_path
         )
 
         with open(pdf_path, "rb") as pdf:
 
             st.download_button(
-                "📄 Download PDF",
-                pdf,
+                label="📄 Download PDF",
+                data=pdf,
                 file_name="Annotation_Report.pdf",
                 mime="application/pdf"
             )
 
         os.remove(pdf_path)
+
+        st.success("Annotation completed successfully!")
+
+    except Exception as e:
+
+        st.exception(e)
